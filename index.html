@@ -5,6 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
 <title>장비 QR 스캔</title>
+<script>
+/* ============================================================
+   ★ 설정: 아래 따옴표 안에 웹앱 주소(…/exec)를 넣으세요.
+   라벨 QR이 이 페이지 주소(짧은 주소)를 쓰는 경우, 기본 카메라로
+   QR을 찍으면 이 페이지를 거쳐 장비 화면으로 바로 이동합니다.
+   ============================================================ */
+const APP_URL = '';
+
+// 라벨 QR(…/cube-scanner/?id=CAM-001)로 들어온 경우 → 장비 화면으로 바로 이동
+(function () {
+  const p = new URLSearchParams(location.search);
+  if (p.get('mode')) { try { if (p.get('app')) localStorage.setItem('cube_app', p.get('app')); } catch (e) {} return; }
+  const id = (p.get('id') || '').toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+  if (!id) return;
+  let app = APP_URL;
+  if (!app) { try { app = localStorage.getItem('cube_app') || ''; } catch (e) {} }
+  window.__REDIRECT = app ? app + (app.includes('?') ? '&' : '?') + 'id=' + encodeURIComponent(id) : 'none';
+  if (app) location.replace(window.__REDIRECT);
+})();
+</script>
 <style>
 :root{--bg:#0b0b0d;--card:#18181b;--text:#f2f2f4;--sub:#9a9aa3;--line:#2a2a2f;--ok:#22c55e;--bad:#ef4444}
 *{box-sizing:border-box}
@@ -14,13 +34,18 @@ html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:16px/
 .head b{font-size:18px}.head span{font-size:13px;color:var(--sub)}
 .cam{position:relative;width:100%;aspect-ratio:1/1;border-radius:16px;overflow:hidden;background:#000}
 video{width:100%;height:100%;object-fit:cover;display:block}
-.frame{position:absolute;inset:18%;border:3px solid rgba(255,255,255,.85);border-radius:14px;box-shadow:0 0 0 999px rgba(0,0,0,.35);transition:border-color .15s}
+.frame{position:absolute;inset:18%;border:3px solid rgba(255,255,255,.85);border-radius:14px;box-shadow:0 0 0 999px rgba(0,0,0,.35);transition:border-color .15s;pointer-events:none}
 .frame.ok{border-color:var(--ok)}.frame.bad{border-color:var(--bad)}
-.start{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:20px;color:var(--sub);font-size:14px}
-.start button{width:auto;padding:14px 28px}
+.start{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:20px;color:var(--sub);font-size:14px;line-height:1.6}
 .start[hidden]{display:none}
-#msg{margin:10px 0;min-height:22px;font-size:15px;text-align:center}
+.start button{width:auto;padding:14px 28px}
+.tools{position:absolute;left:0;right:0;bottom:10px;display:flex;justify-content:center;gap:8px;flex-wrap:wrap}
+.tools button{width:auto;margin:0;padding:7px 12px;font-size:13px;font-weight:700;border-radius:999px;background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.35)}
+.tools button.on{background:#fff;color:#111}
+.tools[hidden]{display:none}
+#msg{margin:10px 0 4px;min-height:22px;font-size:15px;text-align:center}
 #msg.ok{color:var(--ok)}#msg.bad{color:var(--bad)}
+.tip{font-size:12px;color:var(--sub);text-align:center;margin:0 0 10px}
 ul{list-style:none;margin:0;padding:0}
 li{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:8px}
 li .n{flex:1;min-width:0}li .n small{display:block;color:var(--sub);font-size:12px}
@@ -30,36 +55,47 @@ button{width:100%;padding:15px;border:0;border-radius:12px;background:#f2f2f4;co
 .bottom{position:fixed;left:0;right:0;bottom:0;padding:12px 16px calc(12px + env(safe-area-inset-bottom));background:linear-gradient(transparent,var(--bg) 30%)}
 .bottom button{max-width:528px;margin:0 auto;display:block}
 .sub{color:var(--sub);font-size:12px;text-align:center;margin-top:6px}
+.redirect{padding:40px 20px;text-align:center;color:var(--sub);line-height:1.7}
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="wrap" id="scanUI">
   <div class="head"><b id="title">장비 QR 스캔</b><span id="period"></span></div>
   <div class="cam">
     <video id="video" playsinline muted></video>
     <div class="frame" id="frame"></div>
+    <div class="tools" id="tools" hidden></div>
     <div class="start" id="start">
-      <div>QR을 연속으로 찍을 수 있습니다.<br>카메라 권한을 허용해 주세요.</div>
+      <div id="startMsg">QR을 연속으로 찍을 수 있습니다.<br>카메라 권한을 허용해 주세요.</div>
       <button id="startBtn">카메라 켜기</button>
     </div>
   </div>
   <div id="msg">&nbsp;</div>
+  <p class="tip">QR을 네모 안에 · 15~20cm 거리 · 흐리면 조금 멀리</p>
   <ul id="list"></ul>
 </div>
-<div class="bottom"><button id="done">완료</button><div class="sub" id="sub"></div></div>
+<div class="bottom" id="bottom"><button id="done">완료</button><div class="sub" id="sub"></div></div>
 <canvas id="cv" hidden></canvas>
 
 <script>
 // 이 페이지는 카메라로 QR을 연속 인식해서 장비 ID만 앱으로 넘깁니다. 회사 데이터는 들어 있지 않습니다.
+if (window.__REDIRECT) {
+  document.body.innerHTML = window.__REDIRECT === 'none'
+    ? '<div class="redirect">장비 화면 주소가 설정되지 않았습니다.<br>스캐너 파일(index.html) 맨 위 <b>APP_URL</b>에 웹앱 주소를 넣어주세요.</div>'
+    : '<div class="redirect">장비 화면으로 이동 중…</div>';
+  throw new Error('redirect');
+}
+
 const P = new URLSearchParams(location.search);
 const MODE = P.get('mode') === 'return' ? 'return' : 'rent';
-const APP = P.get('app') || '';
+const APP = P.get('app') || APP_URL || '';
 const opener = window.opener;
 const NAMES = {};
 const SCANNED = [];               // {id, ok, msg}
 const lastSeen = {};
-let detector = null, video = $('video'), cv = $('cv'), ctx = cv.getContext('2d', { willReadFrequently: true });
-let audio = null, running = false;
+const video = $('video'), cv = $('cv'), ctx = cv.getContext('2d', { willReadFrequently: true });
+let detector = null, audio = null, running = false, stream = null, track = null, pass = 0;
+let cams = [], camIdx = -1;
 
 function $(id) { return document.getElementById(id); }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -67,7 +103,7 @@ function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ 
 $('title').textContent = MODE === 'return' ? '반납 장비 스캔' : '대여 장비 스캔';
 $('sub').textContent = opener ? '스캔하는 즉시 앱에 담깁니다' : '완료를 누르면 앱으로 이동합니다';
 
-// 앱과 연결
+/* ───── 앱과 연결 ───── */
 window.addEventListener('message', e => {
   const m = e.data || {};
   if (m.type === 'init') {
@@ -88,23 +124,29 @@ function paint() {
   $('list').innerHTML = SCANNED.slice().reverse().map(s => `<li><div class="n">${esc(NAMES[s.id] || s.id)}<small>${esc(s.id)}</small></div>
     <span class="st ${s.ok === false ? 'bad' : 'ok'}">${esc(s.msg || '')}</span>${opener ? '' : `<button data-rm="${esc(s.id)}">빼기</button>`}</li>`).join('');
   document.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { const i = SCANNED.findIndex(s => s.id === b.dataset.rm); if (i >= 0) SCANNED.splice(i, 1); paint(); });
-  const n = SCANNED.filter(s => s.ok !== false).length;
-  $('done').textContent = `완료 (${n}개)`;
+  $('done').textContent = `완료 (${SCANNED.filter(s => s.ok !== false).length}개)`;
 }
 
-// QR 내용에서 장비ID 추출: 라벨 QR(…/exec?id=CAM-001) 또는 ID만 있는 코드
+// QR 내용에서 장비ID 추출: 라벨 QR(…?id=CAM-001) 또는 ID만 있는 코드
 function parseId(text) {
   text = String(text || '').trim();
   try { const u = new URL(text); const v = u.searchParams.get('id'); if (v) return v.toUpperCase(); } catch (e) {}
   return /^[A-Za-z]{2,6}-?\d{1,5}$/.test(text) ? text.toUpperCase() : '';
 }
 
+/* ───── 피드백 (소리·진동·테두리 색) ───── */
+function unlockAudio() {
+  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === 'suspended') audio.resume(); } catch (e) {}
+}
+document.addEventListener('touchstart', unlockAudio, { passive: true });
+document.addEventListener('click', unlockAudio);
 function beep(ok) {
   try {
-    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
-    const o = audio.createOscillator(), g = audio.createGain();
-    o.frequency.value = ok ? 1320 : 330; g.gain.value = 0.08;
-    o.connect(g); g.connect(audio.destination); o.start(); o.stop(audio.currentTime + (ok ? 0.08 : 0.25));
+    if (audio && audio.state === 'running') {
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.frequency.value = ok ? 1320 : 330; g.gain.value = 0.08;
+      o.connect(g); g.connect(audio.destination); o.start(); o.stop(audio.currentTime + (ok ? 0.08 : 0.25));
+    }
   } catch (e) {}
   if (navigator.vibrate) navigator.vibrate(ok ? 60 : [80, 60, 80]);
 }
@@ -127,16 +169,16 @@ function onCode(text) {
   paint();
 }
 
-// 디코더: 안드로이드 크롬은 내장 BarcodeDetector, 아이폰은 jsQR 라이브러리
+/* ───── 디코더: 안드로이드 크롬은 내장 인식기, 아이폰은 jsQR ───── */
 async function initDetector() {
+  if (detector || window.jsQR) return;
   if ('BarcodeDetector' in window) {
     try {
       const f = await BarcodeDetector.getSupportedFormats();
       if (f.includes('qr_code')) { detector = new BarcodeDetector({ formats: ['qr_code'].concat(f.includes('code_128') ? ['code_128'] : []) }); return; }
     } catch (e) {}
   }
-  const srcs = ['https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js', 'https://unpkg.com/jsqr@1.4.0/dist/jsQR.js'];
-  for (const src of srcs) {
+  for (const src of ['https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js', 'https://unpkg.com/jsqr@1.4.0/dist/jsQR.js']) {
     try {
       await new Promise((ok, no) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = no; document.head.appendChild(s); });
       if (window.jsQR) return;
@@ -145,48 +187,123 @@ async function initDetector() {
   throw new Error('QR 인식 기능을 불러오지 못했습니다. 인터넷 연결을 확인하세요.');
 }
 
+// 가운데 네모 영역을 고해상도로 잘라 읽기 ↔ 전체 화면 읽기를 번갈아 수행
+function decodeFrame() {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return;
+  let sx = 0, sy = 0, sw = vw, sh = vh, maxOut = 960;
+  if (pass++ % 3 !== 2) { const side = Math.min(vw, vh) * 0.7; sx = (vw - side) / 2; sy = (vh - side) / 2; sw = sh = side; maxOut = 800; }
+  const k = Math.min(1, maxOut / Math.max(sw, sh));
+  cv.width = Math.round(sw * k); cv.height = Math.round(sh * k);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+  const img = ctx.getImageData(0, 0, cv.width, cv.height);
+  const r = jsQR(img.data, cv.width, cv.height, { inversionAttempts: 'dontInvert' });
+  if (r && r.data) onCode(r.data);
+}
+
 async function scanLoop() {
   if (!running) return;
   try {
     if (video.readyState >= 2) {
-      if (detector) {
-        const codes = await detector.detect(video);
-        codes.forEach(c => onCode(c.rawValue));
-      } else if (window.jsQR) {
-        const w = video.videoWidth, h = video.videoHeight;
-        const scale = Math.min(1, 720 / Math.max(w, h));
-        cv.width = Math.round(w * scale); cv.height = Math.round(h * scale);
-        ctx.drawImage(video, 0, 0, cv.width, cv.height);
-        const img = ctx.getImageData(0, 0, cv.width, cv.height);
-        const r = jsQR(img.data, cv.width, cv.height, { inversionAttempts: 'dontInvert' });
-        if (r && r.data) onCode(r.data);
-      }
+      if (detector) (await detector.detect(video)).forEach(c => onCode(c.rawValue));
+      else if (window.jsQR) decodeFrame();
     }
   } catch (e) {}
-  setTimeout(scanLoop, 120);
+  setTimeout(scanLoop, 60);
 }
 
-$('startBtn').onclick = async () => {
-  $('startBtn').disabled = true;
+/* ───── 카메라 ───── */
+// 아이폰: '트리플/듀얼 와이드' 가상 카메라를 쓰면 가까운 거리에서 자동으로 접사 렌즈로 전환되어 초점이 잘 맞음
+function pickPreferred(list) {
+  const score = d => {
+    const l = (d.label || '').toLowerCase();
+    if (/front|전면/.test(l)) return -1;
+    if (/triple|트리플/.test(l)) return 4;
+    if (/dual wide|듀얼 와이드/.test(l)) return 3;
+    if (/dual|듀얼/.test(l)) return 2;
+    if (/back|rear|후면|environment/.test(l) && !/ultra|울트라|tele|망원/.test(l)) return 1;
+    return 0;
+  };
+  let best = -1, bi = -1;
+  list.forEach((d, i) => { const s = score(d); if (s > best) { best = s; bi = i; } });
+  return best >= 2 ? bi : -1;
+}
+
+async function openStream(deviceId) {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  const v = { width: { ideal: 1920 }, height: { ideal: 1080 } };
+  if (deviceId) v.deviceId = { exact: deviceId }; else v.facingMode = { ideal: 'environment' };
+  stream = await navigator.mediaDevices.getUserMedia({ video: v, audio: false });
+  video.srcObject = stream; await video.play();
+  track = stream.getVideoTracks()[0];
+  // 연속 자동 초점 (지원 기기만)
   try {
-    audio = new (window.AudioContext || window.webkitAudioContext)();   // 아이폰 소리 재생 허용
+    const c = track.getCapabilities ? track.getCapabilities() : {};
+    if (c.focusMode && c.focusMode.includes('continuous')) await track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+  } catch (e) {}
+  buildTools();
+}
+
+function buildTools() {
+  const t = $('tools'); t.innerHTML = '';
+  const c = track && track.getCapabilities ? track.getCapabilities() : {};
+  const add = (label, fn, on) => { const b = document.createElement('button'); b.textContent = label; if (on) b.className = 'on'; b.onclick = fn; t.appendChild(b); return b; };
+  if (c.zoom && c.zoom.max > 1) {
+    const cur = (track.getSettings().zoom) || 1;
+    [1, 2, 3].filter(z => z >= c.zoom.min && z <= c.zoom.max).forEach(z => add(z + 'x', async () => {
+      try { await track.applyConstraints({ advanced: [{ zoom: z }] }); buildTools(); } catch (e) {}
+    }, Math.abs(cur - z) < 0.3));
+  }
+  if (c.torch) {
+    const on = !!track.getSettings().torch;
+    add(on ? '조명 끄기' : '조명', async () => { try { await track.applyConstraints({ advanced: [{ torch: !on }] }); buildTools(); } catch (e) {} }, on);
+  }
+  if (cams.length > 1) add('카메라 전환', async () => {
+    camIdx = (camIdx + 1) % cams.length;
+    try { await openStream(cams[camIdx].deviceId); feedback(true, cams[camIdx].label || ('카메라 ' + (camIdx + 1))); } catch (e) {}
+  });
+  t.hidden = !t.children.length;
+}
+
+async function startCamera() {
+  $('startBtn').disabled = true;
+  unlockAudio();
+  try {
     await initDetector();
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
-    video.srcObject = stream; await video.play();
+    await openStream(null);
+    // 권한을 받은 뒤에야 카메라 이름이 보이므로, 여기서 더 좋은 후면 카메라가 있으면 전환
+    try {
+      cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput' && !/front|전면/i.test(d.label));
+      const pref = pickPreferred(cams);
+      const curId = track.getSettings().deviceId;
+      if (pref >= 0 && cams[pref].deviceId !== curId) { camIdx = pref; await openStream(cams[pref].deviceId); }
+      else camIdx = Math.max(0, cams.findIndex(d => d.deviceId === curId));
+    } catch (e) {}
     $('start').hidden = true; running = true; scanLoop();
-    $('msg').textContent = 'QR을 네모 안에 맞추세요';
+    $('msg').className = ''; $('msg').textContent = 'QR을 네모 안에 맞추세요';
   } catch (e) {
-    $('startBtn').disabled = false;
+    $('startBtn').disabled = false; $('start').hidden = false;
     const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
-    $('start').querySelector('div').innerHTML = denied
-      ? '카메라 권한이 거부되었습니다.<br>브라우저 설정에서 이 사이트의 카메라를 허용한 뒤 다시 시도하세요.'
+    $('startMsg').innerHTML = denied
+      ? '카메라 권한이 거부되었습니다.<br>아이폰: 주소창 왼쪽 <b>가가(aA)</b> → 웹사이트 설정 → 카메라 → <b>허용</b><br>안드로이드: 주소창 왼쪽 아이콘 → 권한 → 카메라 <b>허용</b>'
       : esc(e.message || e);
   }
-};
+}
+$('startBtn').onclick = startCamera;
 
+// 이미 카메라를 '허용'해 둔 경우 버튼 없이 바로 켜기
+(async () => {
+  try {
+    const st = await navigator.permissions.query({ name: 'camera' });
+    if (st.state === 'granted') startCamera();
+  } catch (e) {}
+})();
+
+/* ───── 완료 ───── */
 $('done').onclick = () => {
   running = false;
-  try { (video.srcObject && video.srcObject.getTracks() || []).forEach(t => t.stop()); } catch (e) {}
+  try { if (stream) stream.getTracks().forEach(t => t.stop()); } catch (e) {}
   const ids = SCANNED.filter(s => s.ok !== false).map(s => s.id);
   if (opener && !opener.closed) {
     try { opener.postMessage({ type: 'done', ids }, '*'); } catch (e) {}
