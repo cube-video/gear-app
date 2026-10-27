@@ -11,7 +11,7 @@
    라벨 QR이 이 페이지 주소(짧은 주소)를 쓰는 경우, 기본 카메라로
    QR을 찍으면 이 페이지를 거쳐 장비 화면으로 바로 이동합니다.
    ============================================================ */
-const APP_URL = 'https://script.google.com/a/macros/cubeent.co.kr/s/AKfycbx_rmI7J9A8f6yG_A8M_4ElNPv8B_pC0a18urc9dhBOYuNNvjs0PHkwt98qoSqfgnNR/exec';
+const APP_URL = '';
 
 // 라벨 QR(…/cube-scanner/?id=CAM-001)로 들어온 경우 → 장비 화면으로 바로 이동
 (function () {
@@ -46,6 +46,11 @@ video{width:100%;height:100%;object-fit:cover;display:block}
 #msg{margin:10px 0 4px;min-height:22px;font-size:15px;text-align:center}
 #msg.ok{color:var(--ok)}#msg.bad{color:var(--bad)}
 .tip{font-size:12px;color:var(--sub);text-align:center;margin:0 0 10px}
+#fxBtn{display:block;width:auto;margin:0 auto 10px;padding:9px 16px;font-size:14px;border-radius:999px;background:#2563eb;color:#fff}
+#fxBtn[hidden]{display:none}
+.flash{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .35s}
+.flash.ok{background:rgba(34,197,94,.45);opacity:1;transition:none}
+.flash.bad{background:rgba(239,68,68,.45);opacity:1;transition:none}
 ul{list-style:none;margin:0;padding:0}
 li{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:8px}
 li .n{flex:1;min-width:0}li .n small{display:block;color:var(--sub);font-size:12px}
@@ -63,6 +68,7 @@ button{width:100%;padding:15px;border:0;border-radius:12px;background:#f2f2f4;co
   <div class="head"><b id="title">장비 QR 스캔</b><span id="period"></span></div>
   <div class="cam">
     <video id="video" playsinline muted></video>
+    <div class="flash" id="flash"></div>
     <div class="frame" id="frame"></div>
     <div class="tools" id="tools" hidden></div>
     <div class="start" id="start">
@@ -71,6 +77,7 @@ button{width:100%;padding:15px;border:0;border-radius:12px;background:#f2f2f4;co
     </div>
   </div>
   <div id="msg">&nbsp;</div>
+  <button id="fxBtn" hidden>🔔 소리·진동 켜기</button>
   <p class="tip">QR을 네모 안에 · 15~20cm 거리 · 흐리면 조금 멀리</p>
   <ul id="list"></ul>
 </div>
@@ -114,6 +121,7 @@ window.addEventListener('message', e => {
   } else if (m.type === 'result') {
     const s = SCANNED.find(x => x.id === m.id);
     if (s) { s.ok = m.ok; s.msg = m.msg; if (m.name) NAMES[m.id] = m.name; }
+    if (!m.ok) beep(false);
     feedback(m.ok, (m.name || m.id) + ' · ' + m.msg);
     paint();
   }
@@ -135,8 +143,13 @@ function parseId(text) {
 }
 
 /* ───── 피드백 (소리·진동·테두리 색) ───── */
+// 브라우저 정책상 소리·진동은 화면을 한 번 터치한 뒤부터 허용됨
+const CAN_VIBRATE = 'vibrate' in navigator;   // 안드로이드: 지원 / 아이폰 Safari: 미지원(애플 정책)
+let activated = false;
 function unlockAudio() {
+  activated = true;
   try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === 'suspended') audio.resume(); } catch (e) {}
+  $('fxBtn').hidden = true;
 }
 document.addEventListener('touchstart', unlockAudio, { passive: true });
 document.addEventListener('click', unlockAudio);
@@ -148,11 +161,14 @@ function beep(ok) {
       o.connect(g); g.connect(audio.destination); o.start(); o.stop(audio.currentTime + (ok ? 0.08 : 0.25));
     }
   } catch (e) {}
-  if (navigator.vibrate) navigator.vibrate(ok ? 60 : [80, 60, 80]);
+  if (CAN_VIBRATE) { try { navigator.vibrate(ok ? 150 : [120, 80, 120]); } catch (e) {} }
 }
 function feedback(ok, text) {
   const f = $('frame'), m = $('msg');
   f.className = 'frame ' + (ok ? 'ok' : 'bad'); m.className = ok ? 'ok' : 'bad'; m.textContent = text;
+  // 화면 전체 색 번쩍임 (진동이 안 되는 아이폰에서도 확실히 알 수 있게)
+  const fl = $('flash'); fl.className = 'flash ' + (ok ? 'ok' : 'bad');
+  requestAnimationFrame(() => requestAnimationFrame(() => { fl.className = 'flash'; }));
   clearTimeout(feedback.t); feedback.t = setTimeout(() => { f.className = 'frame'; }, 700);
 }
 
@@ -266,9 +282,9 @@ function buildTools() {
   t.hidden = !t.children.length;
 }
 
-async function startCamera() {
+async function startCamera(fromAuto) {
   $('startBtn').disabled = true;
-  unlockAudio();
+  if (fromAuto !== true) unlockAudio();   // 버튼을 눌러 켠 경우엔 그 터치로 소리·진동도 허용됨
   try {
     await initDetector();
     await openStream(null);
@@ -281,6 +297,10 @@ async function startCamera() {
       else camIdx = Math.max(0, cams.findIndex(d => d.deviceId === curId));
     } catch (e) {}
     $('start').hidden = true; running = true; scanLoop();
+    if (fromAuto === true && !activated) {
+      $('fxBtn').textContent = CAN_VIBRATE ? '🔔 소리·진동 켜기 (한 번 터치)' : '🔔 소리 켜기 (한 번 터치)';
+      $('fxBtn').hidden = false;
+    }
     $('msg').className = ''; $('msg').textContent = 'QR을 네모 안에 맞추세요';
   } catch (e) {
     $('startBtn').disabled = false; $('start').hidden = false;
@@ -290,13 +310,14 @@ async function startCamera() {
       : esc(e.message || e);
   }
 }
-$('startBtn').onclick = startCamera;
+$('startBtn').onclick = () => startCamera(false);
+$('fxBtn').onclick = () => { unlockAudio(); beep(true); };
 
 // 이미 카메라를 '허용'해 둔 경우 버튼 없이 바로 켜기
 (async () => {
   try {
     const st = await navigator.permissions.query({ name: 'camera' });
-    if (st.state === 'granted') startCamera();
+    if (st.state === 'granted') startCamera(true);
   } catch (e) {}
 })();
 
