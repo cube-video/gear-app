@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>장비 QR 스캔</title>
+<style>
+:root{--bg:#0b0b0d;--card:#18181b;--text:#f2f2f4;--sub:#9a9aa3;--line:#2a2a2f;--ok:#22c55e;--bad:#ef4444}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:16px/1.4 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif}
+.wrap{max-width:560px;margin:0 auto;padding:12px 16px calc(96px + env(safe-area-inset-bottom))}
+.head{display:flex;justify-content:space-between;align-items:baseline;margin:4px 0 10px}
+.head b{font-size:18px}.head span{font-size:13px;color:var(--sub)}
+.cam{position:relative;width:100%;aspect-ratio:1/1;border-radius:16px;overflow:hidden;background:#000}
+video{width:100%;height:100%;object-fit:cover;display:block}
+.frame{position:absolute;inset:18%;border:3px solid rgba(255,255,255,.85);border-radius:14px;box-shadow:0 0 0 999px rgba(0,0,0,.35);transition:border-color .15s}
+.frame.ok{border-color:var(--ok)}.frame.bad{border-color:var(--bad)}
+.start{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;padding:20px;color:var(--sub);font-size:14px}
+.start button{width:auto;padding:14px 28px}
+.start[hidden]{display:none}
+#msg{margin:10px 0;min-height:22px;font-size:15px;text-align:center}
+#msg.ok{color:var(--ok)}#msg.bad{color:var(--bad)}
+ul{list-style:none;margin:0;padding:0}
+li{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:8px}
+li .n{flex:1;min-width:0}li .n small{display:block;color:var(--sub);font-size:12px}
+li .st{font-size:13px;font-weight:700}li .st.ok{color:var(--ok)}li .st.bad{color:var(--bad)}
+li button{width:auto;margin:0;padding:6px 10px;font-size:12px;background:transparent;color:var(--sub);border:1px solid var(--line)}
+button{width:100%;padding:15px;border:0;border-radius:12px;background:#f2f2f4;color:#111;font-size:16px;font-weight:700;font-family:inherit;cursor:pointer}
+.bottom{position:fixed;left:0;right:0;bottom:0;padding:12px 16px calc(12px + env(safe-area-inset-bottom));background:linear-gradient(transparent,var(--bg) 30%)}
+.bottom button{max-width:528px;margin:0 auto;display:block}
+.sub{color:var(--sub);font-size:12px;text-align:center;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><b id="title">장비 QR 스캔</b><span id="period"></span></div>
+  <div class="cam">
+    <video id="video" playsinline muted></video>
+    <div class="frame" id="frame"></div>
+    <div class="start" id="start">
+      <div>QR을 연속으로 찍을 수 있습니다.<br>카메라 권한을 허용해 주세요.</div>
+      <button id="startBtn">카메라 켜기</button>
+    </div>
+  </div>
+  <div id="msg">&nbsp;</div>
+  <ul id="list"></ul>
+</div>
+<div class="bottom"><button id="done">완료</button><div class="sub" id="sub"></div></div>
+<canvas id="cv" hidden></canvas>
+
+<script>
+// 이 페이지는 카메라로 QR을 연속 인식해서 장비 ID만 앱으로 넘깁니다. 회사 데이터는 들어 있지 않습니다.
+const P = new URLSearchParams(location.search);
+const MODE = P.get('mode') === 'return' ? 'return' : 'rent';
+const APP = P.get('app') || '';
+const opener = window.opener;
+const NAMES = {};
+const SCANNED = [];               // {id, ok, msg}
+const lastSeen = {};
+let detector = null, video = $('video'), cv = $('cv'), ctx = cv.getContext('2d', { willReadFrequently: true });
+let audio = null, running = false;
+
+function $(id) { return document.getElementById(id); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+$('title').textContent = MODE === 'return' ? '반납 장비 스캔' : '대여 장비 스캔';
+$('sub').textContent = opener ? '스캔하는 즉시 앱에 담깁니다' : '완료를 누르면 앱으로 이동합니다';
+
+// 앱과 연결
+window.addEventListener('message', e => {
+  const m = e.data || {};
+  if (m.type === 'init') {
+    (m.items || []).forEach(i => NAMES[i.id] = i.name);
+    if (m.period) $('period').textContent = m.period;
+    (m.have || []).forEach(id => { if (!SCANNED.some(s => s.id === id)) SCANNED.push({ id, ok: true, msg: '이미 담김' }); });
+    paint();
+  } else if (m.type === 'result') {
+    const s = SCANNED.find(x => x.id === m.id);
+    if (s) { s.ok = m.ok; s.msg = m.msg; if (m.name) NAMES[m.id] = m.name; }
+    feedback(m.ok, (m.name || m.id) + ' · ' + m.msg);
+    paint();
+  }
+});
+if (opener) { try { opener.postMessage({ type: 'ready' }, '*'); } catch (e) {} }
+
+function paint() {
+  $('list').innerHTML = SCANNED.slice().reverse().map(s => `<li><div class="n">${esc(NAMES[s.id] || s.id)}<small>${esc(s.id)}</small></div>
+    <span class="st ${s.ok === false ? 'bad' : 'ok'}">${esc(s.msg || '')}</span>${opener ? '' : `<button data-rm="${esc(s.id)}">빼기</button>`}</li>`).join('');
+  document.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { const i = SCANNED.findIndex(s => s.id === b.dataset.rm); if (i >= 0) SCANNED.splice(i, 1); paint(); });
+  const n = SCANNED.filter(s => s.ok !== false).length;
+  $('done').textContent = `완료 (${n}개)`;
+}
+
+// QR 내용에서 장비ID 추출: 라벨 QR(…/exec?id=CAM-001) 또는 ID만 있는 코드
+function parseId(text) {
+  text = String(text || '').trim();
+  try { const u = new URL(text); const v = u.searchParams.get('id'); if (v) return v.toUpperCase(); } catch (e) {}
+  return /^[A-Za-z]{2,6}-?\d{1,5}$/.test(text) ? text.toUpperCase() : '';
+}
+
+function beep(ok) {
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.frequency.value = ok ? 1320 : 330; g.gain.value = 0.08;
+    o.connect(g); g.connect(audio.destination); o.start(); o.stop(audio.currentTime + (ok ? 0.08 : 0.25));
+  } catch (e) {}
+  if (navigator.vibrate) navigator.vibrate(ok ? 60 : [80, 60, 80]);
+}
+function feedback(ok, text) {
+  const f = $('frame'), m = $('msg');
+  f.className = 'frame ' + (ok ? 'ok' : 'bad'); m.className = ok ? 'ok' : 'bad'; m.textContent = text;
+  clearTimeout(feedback.t); feedback.t = setTimeout(() => { f.className = 'frame'; }, 700);
+}
+
+function onCode(text) {
+  const now = Date.now();
+  if (lastSeen[text] && now - lastSeen[text] < 2500) return;   // 같은 QR 연속 인식 방지
+  lastSeen[text] = now;
+  const id = parseId(text);
+  if (!id) { beep(false); feedback(false, '장비 QR이 아닙니다'); return; }
+  if (SCANNED.some(s => s.id === id)) { feedback(true, (NAMES[id] || id) + ' · 이미 스캔함'); return; }
+  SCANNED.push({ id, ok: undefined, msg: opener ? '확인 중…' : '스캔됨' });
+  beep(true); feedback(true, (NAMES[id] || id) + (opener ? ' · 확인 중…' : ' · 스캔됨'));
+  if (opener) { try { opener.postMessage({ type: 'scan', id }, '*'); } catch (e) {} }
+  paint();
+}
+
+// 디코더: 안드로이드 크롬은 내장 BarcodeDetector, 아이폰은 jsQR 라이브러리
+async function initDetector() {
+  if ('BarcodeDetector' in window) {
+    try {
+      const f = await BarcodeDetector.getSupportedFormats();
+      if (f.includes('qr_code')) { detector = new BarcodeDetector({ formats: ['qr_code'].concat(f.includes('code_128') ? ['code_128'] : []) }); return; }
+    } catch (e) {}
+  }
+  const srcs = ['https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js', 'https://unpkg.com/jsqr@1.4.0/dist/jsQR.js'];
+  for (const src of srcs) {
+    try {
+      await new Promise((ok, no) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = no; document.head.appendChild(s); });
+      if (window.jsQR) return;
+    } catch (e) {}
+  }
+  throw new Error('QR 인식 기능을 불러오지 못했습니다. 인터넷 연결을 확인하세요.');
+}
+
+async function scanLoop() {
+  if (!running) return;
+  try {
+    if (video.readyState >= 2) {
+      if (detector) {
+        const codes = await detector.detect(video);
+        codes.forEach(c => onCode(c.rawValue));
+      } else if (window.jsQR) {
+        const w = video.videoWidth, h = video.videoHeight;
+        const scale = Math.min(1, 720 / Math.max(w, h));
+        cv.width = Math.round(w * scale); cv.height = Math.round(h * scale);
+        ctx.drawImage(video, 0, 0, cv.width, cv.height);
+        const img = ctx.getImageData(0, 0, cv.width, cv.height);
+        const r = jsQR(img.data, cv.width, cv.height, { inversionAttempts: 'dontInvert' });
+        if (r && r.data) onCode(r.data);
+      }
+    }
+  } catch (e) {}
+  setTimeout(scanLoop, 120);
+}
+
+$('startBtn').onclick = async () => {
+  $('startBtn').disabled = true;
+  try {
+    audio = new (window.AudioContext || window.webkitAudioContext)();   // 아이폰 소리 재생 허용
+    await initDetector();
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    video.srcObject = stream; await video.play();
+    $('start').hidden = true; running = true; scanLoop();
+    $('msg').textContent = 'QR을 네모 안에 맞추세요';
+  } catch (e) {
+    $('startBtn').disabled = false;
+    const denied = e && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
+    $('start').querySelector('div').innerHTML = denied
+      ? '카메라 권한이 거부되었습니다.<br>브라우저 설정에서 이 사이트의 카메라를 허용한 뒤 다시 시도하세요.'
+      : esc(e.message || e);
+  }
+};
+
+$('done').onclick = () => {
+  running = false;
+  try { (video.srcObject && video.srcObject.getTracks() || []).forEach(t => t.stop()); } catch (e) {}
+  const ids = SCANNED.filter(s => s.ok !== false).map(s => s.id);
+  if (opener && !opener.closed) {
+    try { opener.postMessage({ type: 'done', ids }, '*'); } catch (e) {}
+    window.close();
+    setTimeout(() => { $('msg').className = ''; $('msg').textContent = '완료. 이 탭을 닫고 앱 화면으로 돌아가세요.'; }, 300);
+  } else if (APP) {
+    location.href = APP + (APP.includes('?') ? '&' : '?') + (MODE === 'return' ? 'ret=' : 'add=') + encodeURIComponent(ids.join(','));
+  } else {
+    $('msg').textContent = '앱 주소를 알 수 없습니다. 앱에서 스캔 버튼으로 다시 열어주세요.';
+  }
+};
+paint();
+</script>
+</body>
+</html>
