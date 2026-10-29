@@ -6,24 +6,27 @@
 <meta name="robots" content="noindex">
 <title>CUBE 장비 QR 스캔</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<!-- 웹앱 주소는 config.js에 따로 저장 (이 파일을 새로 올려도 지워지지 않음) -->
+<script src="config.js"></script>
 <script>
-/* ============================================================
-   ★ 설정: 아래 따옴표 안에 웹앱 주소(…/exec)를 넣으세요.
-   라벨 QR이 이 페이지 주소(짧은 주소)를 쓰는 경우, 기본 카메라로
-   QR을 찍으면 이 페이지를 거쳐 장비 화면으로 바로 이동합니다.
-   ============================================================ */
-const APP_URL = 'https://script.google.com/a/macros/cubeent.co.kr/s/AKfycbx_rmI7J9A8f6yG_A8M_4ElNPv8B_pC0a18urc9dhBOYuNNvjs0PHkwt98qoSqfgnNR/exec';
+const APP_URL = String(window.CUBE_APP_URL || '').trim();
+const TEST_URL = String(window.CUBE_TEST_URL || '').trim();
 
-// 라벨 QR(…/cube-scanner/?id=CAM-001)로 들어온 경우 → 장비 화면으로 바로 이동
+// 이 주소로 바로 들어온 경우 앱으로 이동
+//  - …/?id=CAM-001 (라벨 QR) → 장비 화면
+//  - …/ (주소만)              → 앱 첫 화면
+//  - …/?test                  → 테스트 앱 (config.js의 CUBE_TEST_URL)
 (function () {
   const p = new URLSearchParams(location.search);
   if (p.get('mode')) { try { if (p.get('app')) localStorage.setItem('cube_app', p.get('app')); } catch (e) {} return; }
-  const id = (p.get('id') || '').toUpperCase().replace(/[^A-Z0-9_-]/g, '');
-  if (!id) return;
-  let app = APP_URL;
+  const isTest = p.has('test') || p.has('t');
+  let app = isTest ? TEST_URL : APP_URL;
+  if (isTest && !app) { window.__REDIRECT = 'notest'; return; }
   if (!app) { try { app = localStorage.getItem('cube_app') || ''; } catch (e) {} }
-  window.__REDIRECT = app ? app + (app.includes('?') ? '&' : '?') + 'id=' + encodeURIComponent(id) : 'none';
-  if (app) location.replace(window.__REDIRECT);
+  const id = (p.get('id') || '').toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+  if (!app) { window.__REDIRECT = 'none'; return; }
+  window.__REDIRECT = id ? app + (app.includes('?') ? '&' : '?') + 'id=' + encodeURIComponent(id) : app;
+  location.replace(window.__REDIRECT);
 })();
 </script>
 <style>
@@ -92,8 +95,10 @@ button:active{background:var(--blue-press)}
 // 이 페이지는 카메라로 QR을 연속 인식해서 장비 ID만 앱으로 넘깁니다. 회사 데이터는 들어 있지 않습니다.
 if (window.__REDIRECT) {
   document.body.innerHTML = window.__REDIRECT === 'none'
-    ? '<div class="redirect">장비 화면 주소가 설정되지 않았습니다.<br>스캐너 파일(index.html) 맨 위 <b>APP_URL</b>에 웹앱 주소를 넣어주세요.</div>'
-    : '<div class="redirect">장비 화면으로 이동 중…</div>';
+    ? '<div class="redirect">앱 주소가 설정되지 않았습니다.<br>GitHub 저장소의 <b>config.js</b> 파일에 웹앱 주소를 넣어주세요.</div>'
+    : window.__REDIRECT === 'notest'
+    ? '<div class="redirect">테스트 앱 주소가 설정되지 않았습니다.<br>GitHub 저장소의 <b>config.js</b> 파일 <b>CUBE_TEST_URL</b>에 테스트 웹앱 주소를 넣어주세요.</div>'
+    : '<div class="redirect">CUBE 영상팀 장비로 이동 중…</div>';
   throw new Error('redirect');
 }
 
